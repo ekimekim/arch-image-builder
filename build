@@ -32,6 +32,9 @@ HOSTNAME="arch-image"
 # At the least, you probably want to set up a user.
 SETUP_SCRIPT=
 
+# Anything in this directory will be copied into /setup in the filesystem before the setup script is run
+SETUP_DIR=
+
 # Run config file to collect config
 source "$CONFIG_PATH"
 
@@ -120,12 +123,20 @@ main() {
 		--efi-directory="/boot" \
 		--bootloader-id=GRUB \
 		--removable --no-nvram
+	# Copy over setup dir
+	if [ -n "$SETUP_DIR" ]; then
+		sudo cp -r "$SETUP_DIR" "$MOUNT_PATH/setup"
+	fi
 	# Run user setup script
 	if [ -n "$SETUP_SCRIPT" ]; then
-		sudo cp "$SETUP_SCRIPT" "$MOUNT_PATH/setup"
-		sudo chmod +x "$MOUNT_PATH/setup"
-		sudo arch-chroot "$MOUNT_PATH" /setup
-		sudo rm "$MOUNT_PATH/setup"
+		sudo cp "$SETUP_SCRIPT" "$MOUNT_PATH/setup.sh"
+		sudo chmod +x "$MOUNT_PATH/setup.sh"
+		sudo arch-chroot "$MOUNT_PATH" /setup.sh
+		sudo rm "$MOUNT_PATH/setup.sh"
+	fi
+	# Clean up setup dir
+	if [ -n "$SETUP_DIR" ]; then
+		sudo rm -r "$MOUNT_PATH/setup"
 	fi
 	# Resize root fs to minimum size. To do this it needs to be unmounted.
 	unmount
@@ -151,3 +162,4 @@ main() {
 }
 
 main
+echo "Completed successfully."
