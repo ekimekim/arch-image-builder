@@ -2,10 +2,18 @@
 
 set -euxo pipefail
 
-# Config
+if [ "$#" -lt 2 ]; then
+	echo "USAGE: $0 IMAGE CONFIG" >&2
+	exit 1
+fi
 
 # Output file
 IMAGE_PATH="$1"
+
+# Config file
+CONFIG_PATH="$2"
+
+# Config defaults
 
 # Full image size
 IMAGE_SIZE=10GiB
@@ -22,7 +30,10 @@ HOSTNAME="arch-image"
 # The data directory is NOT yet present but entries in fstab will bind mount it in various places
 # on boot.
 # At the least, you probably want to set up a user.
-SETUP_SCRIPT=setup-test
+SETUP_SCRIPT=
+
+# Run config file to collect config
+source "$CONFIG_PATH"
 
 # End Config
 
@@ -110,10 +121,12 @@ main() {
 		--bootloader-id=GRUB \
 		--removable --no-nvram
 	# Run user setup script
-	sudo cp "$SETUP_SCRIPT" "$MOUNT_PATH/setup"
-	sudo chmod +x "$MOUNT_PATH/setup"
-	sudo arch-chroot "$MOUNT_PATH" /setup
-	sudo rm "$MOUNT_PATH/setup"
+	if [ -n "$SETUP_SCRIPT" ]; then
+		sudo cp "$SETUP_SCRIPT" "$MOUNT_PATH/setup"
+		sudo chmod +x "$MOUNT_PATH/setup"
+		sudo arch-chroot "$MOUNT_PATH" /setup
+		sudo rm "$MOUNT_PATH/setup"
+	fi
 	# Resize root fs to minimum size. To do this it needs to be unmounted.
 	unmount
 	sudo resize2fs -f -M "$ROOT_DEVICE"
