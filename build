@@ -1,3 +1,77 @@
 #!/bin/bash
 
-set -euo pipefail
+set -euxo pipefail
+
+# Config
+
+# Output file
+IMAGE_PATH="$1"
+
+# Full image size
+IMAGE_SIZE=10GiB
+
+# Packages to install, not including base and boot stuff
+PACKAGES=(base linux)
+
+# End Config
+
+# functions to run on exit, in reverse order. errors are ignored.
+CLEANUP=()
+
+do_cleanup() {
+	if [ -n "${NO_CLEANUP:-}" ]; then
+		return
+	fi
+	for ((i=${#CLEANUP[@]}-1; i>=0; i--)); do
+		"${CLEANUP[$i]}" || true
+	done
+}
+trap 'do_cleanup' exit
+
+main() {
+	# Delete existing image if it exists
+	if [ -f "$IMAGE_PATH" ]; then
+		rm "$IMAGE_PATH"
+	fi
+	# Create image file of given size
+	truncate --size "$IMAGE_SIZE" "$IMAGE_PATH"
+	# Create partitions:
+	# 1 - 100MB EFI partition
+	# 2 - Read-only root fs
+	# We will shrink the root fs later and put in a data partition.
+	sgdisk \
+		--new=1:0:+100M --typecode=1:EF02 \
+		--new=2:0:0 --typecode=2:8300 \
+		"$IMAGE_PATH"
+	# Attach image as a loop device so we can access individual partitions.
+	# Use first available loop device, and print it.
+	LOOP_DEVICE=$(sudo losetup --partscan --find --show "$IMAGE_PATH")
+	detach_loop() { sudo losetup -d "$LOOP_DEVICE"; }
+	CLEANUP+=(detach_loop)
+	# Collect some info for later
+	EFI_DEVICE="${LOOP_DEVICE}p1"
+	EFI_PARTUUID=$(lsblk -o partuuid --noheadings "$EFI_DEVICE")
+	ROOT_DEVICE="${LOOP_DEVICE}p2"
+	ROOT_PARTUUID=$(lsblk -o partuuid --noheadings "$ROOT_DEVICE")
+	# Format EFI parition as FAT32, as required
+	sudo mkfs.fat "$EFI_DEVICE"
+	# Format root partition as ext4
+	sudo mkfs.ext4 -L root -U random "$ROOT_DEVICE"
+	# Prepare mount point
+	MOUNT_PATH=$(mktemp -d)
+	delete_mount_path() { rmdir "$MOUNT_PATH"; }
+	CLEANUP+=(delete_mount_path)
+	# Mount things
+	sudo mount "$ROOT_DEVICE" "$MOUNT_PATH"
+	unmount() { sudo umount -R "$MOUNT_PATH"; }
+	CLEANUP+=(unmount)
+	sudo mkdir -p "$MOUNT_PATH/boot"
+	sudo mount "$EFI_DEVICE" "$MOUNT_PATH/boot"
+	# Install base packages. Use host's package cache (less downloads + less space taken in image)
+	sudo pacstrap -c "$MOUNT_PATH"
+
+	# TODO: resize fs and create data part
+	# TODO: add data part to fstab
+}
+
+main
