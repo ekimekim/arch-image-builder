@@ -1,0 +1,10 @@
+#!/usr/bin/bash
+# taken from https://github.com/nils-werner/raspi-overlayroot under MIT licence
+
+build() {
+  add_runscript
+}
+
+help() {
+  echo "This hook overlays a tmpfs on top of a readonly root."
+}
