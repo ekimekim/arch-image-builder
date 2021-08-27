@@ -11,9 +11,22 @@ IMAGE_PATH="$1"
 IMAGE_SIZE=10GiB
 
 # Packages to install, not including base and boot stuff
-PACKAGES=(base linux)
+PACKAGES=()
+
+# Hostname of the system when booted
+HOSTNAME="arch-image"
+
+# Path to a script containing specific setup actions.
+# This script will run inside the new filesystem, with PACKAGES already installed.
+# Anything left in /tmp will be discarded (/tmp is a tmpfs).
+# The data directory is NOT yet present but entries in fstab will bind mount it in various places
+# on boot.
+# At the least, you probably want to set up a user.
+SETUP_SCRIPT=setup-test
 
 # End Config
+
+BASE_PACKAGES=(base linux linux-firmware grub)
 
 # functions to run on exit, in reverse order. errors are ignored.
 CLEANUP=()
@@ -53,6 +66,7 @@ main() {
 	EFI_PARTUUID=$(lsblk -o partuuid --noheadings "$EFI_DEVICE")
 	ROOT_DEVICE="${LOOP_DEVICE}p2"
 	ROOT_PARTUUID=$(lsblk -o partuuid --noheadings "$ROOT_DEVICE")
+	DATA_PARTUUID=$(uuidgen)
 	# Format EFI parition as FAT32, as required
 	sudo mkfs.fat "$EFI_DEVICE"
 	# Format root partition as ext4
@@ -68,10 +82,34 @@ main() {
 	sudo mkdir -p "$MOUNT_PATH/boot"
 	sudo mount "$EFI_DEVICE" "$MOUNT_PATH/boot"
 	# Install base packages. Use host's package cache (less downloads + less space taken in image)
-	sudo pacstrap -c "$MOUNT_PATH"
-
-	# TODO: resize fs and create data part
-	# TODO: add data part to fstab
+	sudo pacstrap -c "$MOUNT_PATH" "${BASE_PACKAGES[@]}" "${PACKAGES[@]}"
+	# Write fstab
+	sudo tee "$MOUNT_PATH/etc/fstab" >/dev/null <<-EOF
+		# <file system>	<dir>	<type>	<options>	<dump>	<pass>
+		PARTUUID=$ROOT_PARTUUID	/	ext4	ro	0	0
+		PARTUUID=$EFI_PARTUUID	/boot	fat	ro	0	0
+		PARTUUID=$DATA_PARTUUID	/mnt	ext4	rw,relatime,data=ordered	0	0
+		/mnt/var_log	/var/log	none	rw,bind	0	0
+	EOF
+	# Set UTC timezone
+	sudo ln -s /usr/share/zoneinfo/Universal "$MOUNT_PATH/etc/localtime"
+	# Set hostname
+	sudo tee "$MOUNT_PATH/etc/hostname" >/dev/null <<<"$HOSTNAME"
+	# Set up bootloader
+	sudo arch-chroot "$MOUNT_PATH" grub-install \
+		--target=x86_64-efi \
+		--efi-directory="/boot" \
+		--bootloader-id=GRUB \
+		--removable --no-nvram
+	# Run user setup script
+	sudo cp "$SETUP_SCRIPT" "$MOUNT_PATH/setup"
+	sudo chmod +x "$MOUNT_PATH/setup"
+	sudo arch-chroot "$MOUNT_PATH" /setup
+	sudo rm "$MOUNT_PATH/setup"
+	# Resize root fs to minimum size. To do this it needs to be unmounted.
+	unmount
+	unmount() { true; } # re-define unmount as a no-op since it's already done now
+	# TODO resize root fs and make data partition
 }
 
 main
