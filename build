@@ -24,7 +24,7 @@ PACKAGES=()
 # Hostname of the system when booted
 HOSTNAME="arch-image"
 
-# Path to a script containing specific setup actions.
+# Path to a script containing specific setup actions, relative to config file.
 # This script will run inside the new filesystem, with PACKAGES already installed.
 # Anything left in /tmp will be discarded (/tmp is a tmpfs).
 # The data directory is NOT yet present but entries in fstab will bind mount it in various places
@@ -32,6 +32,7 @@ HOSTNAME="arch-image"
 # At the least, you probably want to set up a user.
 SETUP_SCRIPT=
 
+# Directory path, relative to config file.
 # Anything in this directory will be copied into /setup in the filesystem before the setup script is run
 SETUP_DIR=
 
@@ -42,6 +43,7 @@ source "$CONFIG_PATH"
 
 BASE_PACKAGES=(base linux linux-firmware grub)
 HERE=$(dirname "$(realpath "$0")")
+CONFIG_DIR=$(dirname "$(realpath "$CONFIG_PATH")")
 
 # functions to run on exit, in reverse order. errors are ignored.
 CLEANUP=()
@@ -135,11 +137,11 @@ main() {
 	sudo arch-chroot "$MOUNT_PATH" grub-mkconfig -o /boot/grub/grub.cfg
 	# Copy over setup dir
 	if [ -n "$SETUP_DIR" ]; then
-		sudo cp -r "$SETUP_DIR" "$MOUNT_PATH/setup"
+		sudo cp -r "$CONFIG_DIR/$SETUP_DIR" "$MOUNT_PATH/setup"
 	fi
 	# Run user setup script
 	if [ -n "$SETUP_SCRIPT" ]; then
-		sudo cp "$SETUP_SCRIPT" "$MOUNT_PATH/setup.sh"
+		sudo cp "$CONFIG_DIR/$SETUP_SCRIPT" "$MOUNT_PATH/setup.sh"
 		sudo chmod +x "$MOUNT_PATH/setup.sh"
 		sudo arch-chroot "$MOUNT_PATH" /setup.sh
 		sudo rm "$MOUNT_PATH/setup.sh"
