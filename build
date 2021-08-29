@@ -67,22 +67,22 @@ main() {
 	# 1 - 100MB EFI partition
 	# 2 - Read-only root fs
 	# We will shrink the root fs later and put in a data partition.
+	# Generating uuids and setting them is easier than parsing out the randomly-generated ones.
+	EFI_PARTUUID=$(uuidgen)
+	ROOT_PARTUUID=$(uuidgen)
+	DATA_PARTUUID=$(uuidgen)
 	sgdisk \
-		--new=1:0:+100M --typecode=1:EF02 \
-		--new=2:0:0 --typecode=2:8300 \
+		--new=1:0:+100M --typecode=1:EF02 --partition-guid="1:$EFI_PARTUUID" \
+		--new=2:0:0 --typecode=2:8300 --partition-guid="2:$ROOT_PARTUUID" \
 		"$IMAGE_PATH"
 	# Attach image as a loop device so we can access individual partitions.
 	# Use first available loop device, and print it.
 	LOOP_DEVICE=$(sudo losetup --partscan --find --show "$IMAGE_PATH")
 	detach_loop() { sudo losetup -d "$LOOP_DEVICE"; }
 	CLEANUP+=(detach_loop)
-	# Collect some info for later
 	EFI_DEVICE="${LOOP_DEVICE}p1"
-	EFI_PARTUUID=$(lsblk -o partuuid --noheadings "$EFI_DEVICE")
 	ROOT_DEVICE="${LOOP_DEVICE}p2"
-	ROOT_PARTUUID=$(lsblk -o partuuid --noheadings "$ROOT_DEVICE")
 	DATA_DEVICE="${LOOP_DEVICE}p3"
-	DATA_PARTUUID=$(uuidgen)
 	# Format EFI parition as FAT32, as required
 	sudo mkfs.fat "$EFI_DEVICE"
 	# Format root partition as ext4
@@ -102,17 +102,21 @@ main() {
 	# Write fstab
 	# Note our initcpio hook means that / is not our real root here, it's replaced by an overlayfs
 	# which covers it with a tmpfs.
+	# Note we don't mount our EFI partition. There's no need and it requires additional dependencies
+	# because of the FAT filesystem.
 	sudo tee "$MOUNT_PATH/etc/fstab" >/dev/null <<-EOF
 		# <file system>	<dir>	<type>	<options>	<dump>	<pass>
 		PARTUUID=$ROOT_PARTUUID	/	ext4	ro	0	0
-		PARTUUID=$EFI_PARTUUID	/boot	fat	ro	0	0
 		PARTUUID=$DATA_PARTUUID	/mnt	ext4	rw,relatime,data=ordered	0	0
 		/mnt/var_log	/var/log	none	rw,bind	0	0
 	EOF
 	# Set up initcpio hook for overlay
 	sudo cp "$HERE/overlayroot-install" "$MOUNT_PATH/etc/initcpio/install/overlayroot"
 	sudo cp "$HERE/overlayroot-hook" "$MOUNT_PATH/etc/initcpio/hooks/overlayroot"
-	sudo arch-chroot "$MOUNT_PATH" mkinitcpio -P --addhooks overlayroot
+	sudo arch-chroot "$MOUNT_PATH" mkinitcpio \
+		--generate /boot/initramfs-linux.img \
+		--kernel /boot/vmlinuz-linux \
+		--addhooks overlayroot
 	# Set UTC timezone
 	sudo ln -s /usr/share/zoneinfo/Universal "$MOUNT_PATH/etc/localtime"
 	# Set hostname
@@ -123,6 +127,12 @@ main() {
 		--efi-directory="/boot" \
 		--bootloader-id=GRUB \
 		--removable --no-nvram
+	# Append following to /etc/default/grub, then generate config file
+	sudo tee -a "$MOUNT_PATH/etc/default/grub" <<-EOF
+		GRUB_TIMEOUT=1
+		GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 audit=0"
+	EOF
+	sudo arch-chroot "$MOUNT_PATH" grub-mkconfig -o /boot/grub/grub.cfg
 	# Copy over setup dir
 	if [ -n "$SETUP_DIR" ]; then
 		sudo cp -r "$SETUP_DIR" "$MOUNT_PATH/setup"
@@ -133,6 +143,10 @@ main() {
 		sudo chmod +x "$MOUNT_PATH/setup.sh"
 		sudo arch-chroot "$MOUNT_PATH" /setup.sh
 		sudo rm "$MOUNT_PATH/setup.sh"
+	fi
+	# Optionally drop user into a shell for inspection
+	if [ -n "${INSPECT:-}" ]; then
+		sudo arch-chroot "$MOUNT_PATH" bash
 	fi
 	# Clean up setup dir
 	if [ -n "$SETUP_DIR" ]; then
