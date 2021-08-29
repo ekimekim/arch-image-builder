@@ -59,12 +59,25 @@ do_cleanup() {
 trap 'do_cleanup' exit
 
 main() {
-	# Delete existing image if it exists
-	if [ -f "$IMAGE_PATH" ]; then
-		rm "$IMAGE_PATH"
+	# Are we creating an image file or writing directly to a block device?
+	if [ -b "$IMAGE_PATH" ]; then
+		echo "Ignoring IMAGE_SIZE because output path is a block device"
+		DISK_DEVICE="$IMAGE_PATH"
+		# Destroy any existing partition table, ensuring a clean slate
+		sudo sgdisk --zap-all "$DISK_DEVICE"
+	else
+		# Delete existing image if it exists
+		if [ -f "$IMAGE_PATH" ]; then
+			rm "$IMAGE_PATH"
+		fi
+		# Create image file of given size
+		truncate --size "$IMAGE_SIZE" "$IMAGE_PATH"
+		# Attach image as a loop device so we can access individual partitions.
+		# Use first available loop device, and print it.
+		DISK_DEVICE=$(sudo losetup --partscan --find --show "$IMAGE_PATH")
+		detach_loop() { sudo losetup -d "$DISK_DEVICE"; }
+		CLEANUP+=(detach_loop)
 	fi
-	# Create image file of given size
-	truncate --size "$IMAGE_SIZE" "$IMAGE_PATH"
 	# Create partitions:
 	# 1 - 100MB EFI partition
 	# 2 - Read-only root fs
@@ -73,22 +86,28 @@ main() {
 	EFI_PARTUUID=$(uuidgen)
 	ROOT_PARTUUID=$(uuidgen)
 	DATA_PARTUUID=$(uuidgen)
-	sgdisk \
+	sudo sgdisk \
 		--new=1:0:+100M --typecode=1:EF02 --partition-guid="1:$EFI_PARTUUID" \
 		--new=2:0:0 --typecode=2:8300 --partition-guid="2:$ROOT_PARTUUID" \
-		"$IMAGE_PATH"
-	# Attach image as a loop device so we can access individual partitions.
-	# Use first available loop device, and print it.
-	LOOP_DEVICE=$(sudo losetup --partscan --find --show "$IMAGE_PATH")
-	detach_loop() { sudo losetup -d "$LOOP_DEVICE"; }
-	CLEANUP+=(detach_loop)
-	EFI_DEVICE="${LOOP_DEVICE}p1"
-	ROOT_DEVICE="${LOOP_DEVICE}p2"
-	DATA_DEVICE="${LOOP_DEVICE}p3"
+		"$DISK_DEVICE"
+	# We need to work out if partition names are available as DEV1 (eg. sda1) or DEVp1 (eg. loop0p1)
+	BASE_DEVICE=$(basename "$DISK_DEVICE")
+	if [ -e "/sys/class/block/$BASE_DEVICE/${BASE_DEVICE}1" ]; then
+		EFI_DEVICE="${DISK_DEVICE}1"
+		ROOT_DEVICE="${DISK_DEVICE}2"
+		DATA_DEVICE="${DISK_DEVICE}3"
+	elif [ -e "/sys/class/block/$BASE_DEVICE/${BASE_DEVICE}p1" ]; then
+		EFI_DEVICE="${DISK_DEVICE}p1"
+		ROOT_DEVICE="${DISK_DEVICE}p2"
+		DATA_DEVICE="${DISK_DEVICE}p3"
+	else
+		echo "Unable to find device partitions"
+		return 1
+	fi
 	# Format EFI parition as FAT32, as required
 	sudo mkfs.fat "$EFI_DEVICE"
 	# Format root partition as ext4
-	sudo mkfs.ext4 -L root -U random "$ROOT_DEVICE"
+	sudo mkfs.ext4 -F -L root "$ROOT_DEVICE"
 	# Prepare mount point
 	MOUNT_PATH=$(mktemp -d)
 	delete_mount_path() { rmdir "$MOUNT_PATH"; }
@@ -170,9 +189,9 @@ main() {
 		--new="2:0:+${FS_KIB}K" \
 		--new=3:0:0 \
 		--partition-guid="3:$DATA_PARTUUID" \
-		"$LOOP_DEVICE"
+		"$DISK_DEVICE"
 	# Make the data partition, mount it and create bind directories
-	sudo mkfs.ext4 -F "$DATA_DEVICE"
+	sudo mkfs.ext4 -F -L data "$DATA_DEVICE"
 	sudo mount "$DATA_DEVICE" "$MOUNT_PATH"
 	sudo mkdir -p "$MOUNT_PATH/var_log"
 }
