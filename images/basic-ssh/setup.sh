@@ -18,7 +18,9 @@ pacman-key --lsign-key DDF7DB817396A49B2A2723F7403BD972F75D9D76
 pacman -Sy --noconfirm zfs-dkms
 
 # Import pool on boot
-systemctl enable zfs-import-scan
+install -D -m 644 /setup/import-pool.service /etc/systemd/system/import-pool.service
+systemctl daemon-reload
+systemctl enable import-pool
 
 # Run docker out of a tmpfs for performance
 cat >> /etc/fstab <<-EOF
