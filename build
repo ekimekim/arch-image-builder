@@ -36,6 +36,10 @@ SETUP_SCRIPT=
 # Anything in this directory will be copied into /setup in the filesystem before the setup script is run
 SETUP_DIR=
 
+# A file containing patterns to not copy as part of copying into /setup.
+# This file uses rsync's --exclude-from format.
+SETUP_EXCLUDE=
+
 # Run config file to collect config
 source "$CONFIG_PATH"
 
@@ -156,7 +160,12 @@ main() {
 	sudo arch-chroot "$MOUNT_PATH" grub-mkconfig -o /boot/grub/grub.cfg
 	# Copy over setup dir
 	if [ -n "$SETUP_DIR" ]; then
-		sudo cp -r "$CONFIG_DIR/$SETUP_DIR" "$MOUNT_PATH/setup"
+		EXCLUDE_ARGS=()
+		if [ -n "$SETUP_EXCLUDE" ]; then
+			EXCLUDE_ARGS+=(--exclude-from "$CONFIG_DIR/$SETUP_EXCLUDE")
+		fi
+		sudo mkdir "$MOUNT_PATH/setup"
+		sudo rsync -a "${EXCLUDE_ARGS[@]}" "$CONFIG_DIR/$SETUP_DIR/" "$MOUNT_PATH/setup"
 	fi
 	# Run user setup script
 	if [ -n "$SETUP_SCRIPT" ]; then
