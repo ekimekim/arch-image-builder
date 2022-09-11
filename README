@@ -1,3 +1,2 @@
 Scripts for creating a bootable arch image for a USB,
-with an immutable rootfs along with a writable volume,
 preconfigured with whatever packages and other features are desired.

@@ -46,7 +46,6 @@ source "$CONFIG_PATH"
 # End Config
 
 BASE_PACKAGES=(base linux linux-firmware grub)
-HERE=$(dirname "$(realpath "$0")")
 CONFIG_DIR=$(dirname "$(realpath "$CONFIG_PATH")")
 
 # functions to run on exit, in reverse order. errors are ignored.
@@ -84,12 +83,10 @@ main() {
 	fi
 	# Create partitions:
 	# 1 - 100MB EFI partition
-	# 2 - Read-only root fs
-	# We will shrink the root fs later and put in a data partition.
+	# 2 - Root fs
 	# Generating uuids and setting them is easier than parsing out the randomly-generated ones.
 	EFI_PARTUUID=$(uuidgen)
 	ROOT_PARTUUID=$(uuidgen)
-	DATA_PARTUUID=$(uuidgen)
 	sudo sgdisk \
 		--new=1:0:+100M --typecode=1:EF02 --partition-guid="1:$EFI_PARTUUID" \
 		--new=2:0:0 --typecode=2:8300 --partition-guid="2:$ROOT_PARTUUID" \
@@ -99,11 +96,9 @@ main() {
 	if [ -e "/sys/class/block/$BASE_DEVICE/${BASE_DEVICE}1" ]; then
 		EFI_DEVICE="${DISK_DEVICE}1"
 		ROOT_DEVICE="${DISK_DEVICE}2"
-		DATA_DEVICE="${DISK_DEVICE}3"
 	elif [ -e "/sys/class/block/$BASE_DEVICE/${BASE_DEVICE}p1" ]; then
 		EFI_DEVICE="${DISK_DEVICE}p1"
 		ROOT_DEVICE="${DISK_DEVICE}p2"
-		DATA_DEVICE="${DISK_DEVICE}p3"
 	else
 		echo "Unable to find device partitions"
 		return 1
@@ -131,17 +126,9 @@ main() {
 	# because of the FAT filesystem.
 	sudo tee "$MOUNT_PATH/etc/fstab" >/dev/null <<-EOF
 		# <file system>	<dir>	<type>	<options>	<dump>	<pass>
-		PARTUUID=$ROOT_PARTUUID	/	ext4	ro	0	0
-		PARTUUID=$DATA_PARTUUID	/mnt	ext4	rw,relatime,data=ordered	0	0
-		/mnt/var_log	/var/log	none	rw,bind	0	0
+		PARTUUID=$ROOT_PARTUUID	/	ext4	rw,relatime,data=ordered	0	0
 	EOF
-	# Set up initcpio hook for overlay
-	sudo cp "$HERE/overlayroot-install" "$MOUNT_PATH/etc/initcpio/install/overlayroot"
-	sudo cp "$HERE/overlayroot-hook" "$MOUNT_PATH/etc/initcpio/hooks/overlayroot"
-	sudo arch-chroot "$MOUNT_PATH" mkinitcpio \
-		--generate /boot/initramfs-linux.img \
-		--kernel /boot/vmlinuz-linux \
-		--addhooks overlayroot
+#	sudo arch-chroot "$MOUNT_PATH" mkinitcpio -P
 	# Set UTC timezone
 	sudo ln -s /usr/share/zoneinfo/Universal "$MOUNT_PATH/etc/localtime"
 	# Set hostname
@@ -182,27 +169,6 @@ main() {
 	if [ -n "$SETUP_DIR" ]; then
 		sudo rm -r "$MOUNT_PATH/setup"
 	fi
-	# Resize root fs to minimum size. To do this it needs to be unmounted.
-	unmount
-	sudo resize2fs -f -M "$ROOT_DEVICE"
-	# Get the new fs size
-	FS_KIB=$(sudo dumpe2fs -h "$ROOT_DEVICE" | awk -F: '
-		$1 ~ /Block count/ { count=$2 }
-		$1 ~ /Block size/ { size=$2 }
-		END { print count*size/1024 }
-	')
-	# Resize the rootfs partition to the new filesystem size,
-	# then make the data partition (with the uuid we pre-allocated) in the remaining space.
-	sudo sgdisk \
-		--delete=2 \
-		--new="2:0:+${FS_KIB}K" \
-		--new=3:0:0 \
-		--partition-guid="3:$DATA_PARTUUID" \
-		"$DISK_DEVICE"
-	# Make the data partition, mount it and create bind directories
-	sudo mkfs.ext4 -F -L data "$DATA_DEVICE"
-	sudo mount "$DATA_DEVICE" "$MOUNT_PATH"
-	sudo mkdir -p "$MOUNT_PATH/var_log"
 }
 
 main
